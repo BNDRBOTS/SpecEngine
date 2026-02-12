@@ -1,0 +1,9 @@
+{
+  "name": "specengine-backend",
+  "version": "1.0.0",
+  "description": "Dependencies for Netlify Functions",
+  "dependencies": {
+    "@upstash/redis": "^1.28.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
