@@ -19,6 +19,25 @@ exports.handler = async (event) => {
 
   if (!license_key) return { statusCode: 400, body: JSON.stringify({ error: 'Missing license key' }) };
 
+  // ==========================================
+  // 🔴 DIAGNOSTIC BYPASS START
+  // ==========================================
+  if (license_key === 'DEV-BYPASS') {
+    // 1. Force write "active" to Redis so check-session.js finds it
+    await redis.set(`entitlement:${license_key}`, 'active');
+    
+    // 2. Issue a real JWT so the frontend works normally
+    const token = jwt.sign({ license_key }, process.env.APP_JWT_SECRET, { expiresIn: '1d' });
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ token })
+    };
+  }
+  // ==========================================
+  // 🔴 DIAGNOSTIC BYPASS END
+  // ==========================================
+
   const params = new URLSearchParams({
     product_permalink: process.env.GUMROAD_PRODUCT_PERMALINK,
     license_key: license_key
@@ -31,6 +50,7 @@ exports.handler = async (event) => {
     });
     const data = await res.json();
 
+    // Logic: Allow access unless explicitly refunded, chargebacked, or time-ended
     const isValid = data.success 
       && !data.purchase.refunded 
       && !data.purchase.chargebacked 
@@ -45,6 +65,7 @@ exports.handler = async (event) => {
         body: JSON.stringify({ token })
       };
     } else {
+      console.log('Gumroad Rejection:', JSON.stringify(data)); // Logs error to Netlify for debugging
       return {
         statusCode: 403,
         body: JSON.stringify({ error: 'Invalid, expired, or refunded license key.' })
