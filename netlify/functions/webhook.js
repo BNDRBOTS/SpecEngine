@@ -6,48 +6,35 @@ const redis = new Redis({
 });
 
 exports.handler = async (event) => {
+  const SUCCESS_RESPONSE = { statusCode: 200, body: 'Received' };
+
   if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
 
-  // 1. Verify Authentication via Query Param Secret
-  const secret = event.queryStringParameters.secret;
-  if (secret !== process.env.GUMROAD_WEBHOOK_SECRET) {
-    console.warn('Unauthorized webhook attempt');
-    return { statusCode: 401, body: 'Unauthorized webhook' };
-  }
-
-  // 2. Parse Payload (Gumroad sends form-urlencoded for webhooks)
-  let payload;
   try {
-    if (event.headers['content-type']?.includes('application/x-www-form-urlencoded')) {
-      payload = Object.fromEntries(new URLSearchParams(event.body));
-    } else {
-      payload = JSON.parse(event.body);
+    const payload = new URLSearchParams(event.body);
+    
+    const resource_name = payload.get('resource_name'); 
+    const license_key = payload.get('license_key');
+    const product_permalink = payload.get('product_permalink'); 
+
+    if (process.env.GUMROAD_PRODUCT_PERMALINK && product_permalink !== process.env.GUMROAD_PRODUCT_PERMALINK) {
+       return SUCCESS_RESPONSE;
     }
-  } catch (e) {
-    return { statusCode: 400, body: 'Invalid payload' };
+
+    if (!license_key) return SUCCESS_RESPONSE;
+
+    const shouldRevoke = 
+      resource_name === 'refund' || 
+      resource_name === 'chargeback' || 
+      resource_name === 'dispute'; 
+
+    if (shouldRevoke) {
+      await redis.del(`entitlement:${license_key}`);
+    }
+
+    return SUCCESS_RESPONSE;
+
+  } catch (error) {
+    return { statusCode: 500, body: 'Server Error' };
   }
-
-  const licenseKey = payload.license_key;
-  if (!licenseKey) {
-    // Return 200 to acknowledge webhook idempotently if irrelevant data was sent
-    return { statusCode: 200, body: 'No license key, ignoring.' };
-  }
-
-  // 3. Determine Revocation State
-  const isRevoked = 
-    payload.refunded === 'true' || payload.refunded === true ||
-    payload.chargebacked === 'true' || payload.chargebacked === true ||
-    (payload.subscription_cancelled_at && payload.subscription_cancelled_at !== 'null' && payload.subscription_cancelled_at !== '');
-
-  // 4. Update Entitlement Store (Idempotent)
-  if (isRevoked) {
-    await redis.set(`entitlement:${licenseKey}`, 'revoked');
-    console.log(`Access revoked for: ${licenseKey}`);
-  } else {
-    // Handles renewals and standard rebills
-    await redis.set(`entitlement:${licenseKey}`, 'active');
-    console.log(`Access activated/renewed for: ${licenseKey}`);
-  }
-
-  return { statusCode: 200, body: 'Processed successfully' };
 };
